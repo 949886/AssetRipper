@@ -10,6 +10,12 @@ namespace AssetRipper.IO.Files.Endfield;
 public sealed class EndfieldOverlayFileSystem : FileSystem
 {
 	private const string VirtualDirectoryName = "__EndfieldVfs";
+	private static readonly EndfieldVfsBlockType[] BundleBlockTypes =
+	[
+		EndfieldVfsBlockType.InitialBundle,
+		EndfieldVfsBlockType.Bundle,
+	];
+
 	private readonly FileSystem m_inner;
 	private readonly Dictionary<string, MountedEntry> m_virtualFiles;
 	private readonly HashSet<string> m_virtualDirectories;
@@ -48,9 +54,8 @@ public sealed class EndfieldOverlayFileSystem : FileSystem
 	}
 
 	/// <summary>
-	/// Creates an overlay for an installed Endfield data directory. The regular StreamingAssets VFS is
-	/// the primary source and Persistent is used as a fallback, matching AnimeStudio's loader behavior.
-	/// Blocks present only in Persistent are mounted as an additional fallback pass.
+	/// Creates an overlay for an installed Endfield data directory. StreamingAssets is the primary VFS
+	/// source and Persistent is used as fallback for both block metadata and chunk payloads.
 	/// </summary>
 	public static bool TryCreate(FileSystem fileSystem, string gameDataPath, [NotNullWhen(true)] out EndfieldOverlayFileSystem? overlay)
 	{
@@ -91,66 +96,84 @@ public sealed class EndfieldOverlayFileSystem : FileSystem
 	private static List<MountedEntry> BuildEntries(string primaryVfsPath, string? fallbackVfsPath, string virtualRootPath)
 	{
 		List<MountedEntry> entries = [];
-		HashSet<string> visitedBlocks = new(StringComparer.OrdinalIgnoreCase);
-		MountBlocks(primaryVfsPath, fallbackVfsPath, virtualRootPath, visitedBlocks, entries);
-		if (!string.IsNullOrEmpty(fallbackVfsPath))
+		foreach (EndfieldVfsBlockType blockType in BundleBlockTypes)
 		{
-			MountBlocks(fallbackVfsPath, primaryVfsPath, virtualRootPath, visitedBlocks, entries);
-		}
-		return entries;
-	}
+			string directoryName = EndfieldVfsHash.GetBlockDirectoryName(blockType);
+			string primaryBlockDirectory = System.IO.Path.Combine(primaryVfsPath, directoryName);
+			string? fallbackBlockDirectory = string.IsNullOrEmpty(fallbackVfsPath)
+				? null
+				: System.IO.Path.Combine(fallbackVfsPath, directoryName);
 
-	private static void MountBlocks(
-		string sourceVfsPath,
-		string? fallbackVfsPath,
-		string virtualRootPath,
-		HashSet<string> visitedBlocks,
-		List<MountedEntry> entries)
-	{
-		foreach (string blockFilePath in System.IO.Directory
-			.EnumerateFiles(sourceVfsPath, "*.blc", SearchOption.AllDirectories)
-			.OrderBy(static path => path, StringComparer.OrdinalIgnoreCase))
-		{
-			string relativeBlockPath = System.IO.Path.GetRelativePath(sourceVfsPath, blockFilePath);
-			if (!visitedBlocks.Add(relativeBlockPath))
+			string? blockFilePath = ResolveBlockFilePath(directoryName, primaryBlockDirectory, fallbackBlockDirectory);
+			if (blockFilePath is null)
 			{
 				continue;
 			}
 
 			EndfieldVfsBlockInfo block = EndfieldVfsReader.ReadBlock(blockFilePath);
-			if (block.BlockType is not (EndfieldVfsBlockType.InitialBundle or EndfieldVfsBlockType.Bundle))
+			if (block.BlockType != blockType)
 			{
-				continue;
+				throw new InvalidDataException(
+					$"Endfield VFS block {directoryName} reported type {block.BlockType}, expected {blockType}.");
 			}
 
-			string relativeBlockDirectory = System.IO.Path.GetRelativePath(sourceVfsPath, block.DirectoryPath);
-			string? fallbackBlockDirectory = string.IsNullOrEmpty(fallbackVfsPath)
-				? null
-				: System.IO.Path.Combine(fallbackVfsPath, relativeBlockDirectory);
+			MountBlock(block, primaryBlockDirectory, fallbackBlockDirectory, virtualRootPath, entries);
+		}
+		return entries;
+	}
 
-			foreach (EndfieldVfsChunkInfo chunk in block.Chunks)
+	private static string? ResolveBlockFilePath(
+		string directoryName,
+		string primaryBlockDirectory,
+		string? fallbackBlockDirectory)
+	{
+		string blockFileName = $"{directoryName}.blc";
+		string primaryBlockFile = System.IO.Path.Combine(primaryBlockDirectory, blockFileName);
+		if (System.IO.File.Exists(primaryBlockFile))
+		{
+			return primaryBlockFile;
+		}
+
+		if (!string.IsNullOrEmpty(fallbackBlockDirectory))
+		{
+			string fallbackBlockFile = System.IO.Path.Combine(fallbackBlockDirectory, blockFileName);
+			if (System.IO.File.Exists(fallbackBlockFile))
 			{
-				string chunkPath = System.IO.Path.Combine(block.DirectoryPath, chunk.FileName);
-				if (!System.IO.File.Exists(chunkPath) && !string.IsNullOrEmpty(fallbackBlockDirectory))
-				{
-					string fallbackChunkPath = System.IO.Path.Combine(fallbackBlockDirectory, chunk.FileName);
-					if (System.IO.File.Exists(fallbackChunkPath))
-					{
-						chunkPath = fallbackChunkPath;
-					}
-				}
+				return fallbackBlockFile;
+			}
+		}
+		return null;
+	}
 
-				if (!System.IO.File.Exists(chunkPath))
+	private static void MountBlock(
+		EndfieldVfsBlockInfo block,
+		string primaryBlockDirectory,
+		string? fallbackBlockDirectory,
+		string virtualRootPath,
+		List<MountedEntry> entries)
+	{
+		foreach (EndfieldVfsChunkInfo chunk in block.Chunks)
+		{
+			string chunkPath = System.IO.Path.Combine(primaryBlockDirectory, chunk.FileName);
+			if (!System.IO.File.Exists(chunkPath) && !string.IsNullOrEmpty(fallbackBlockDirectory))
+			{
+				string fallbackChunkPath = System.IO.Path.Combine(fallbackBlockDirectory, chunk.FileName);
+				if (System.IO.File.Exists(fallbackChunkPath))
 				{
-					throw new FileNotFoundException($"Endfield VFS chunk was not found: {chunk.FileName}", chunkPath);
+					chunkPath = fallbackChunkPath;
 				}
+			}
 
-				foreach (EndfieldVfsFileInfo file in chunk.Files)
-				{
-					string safeName = CreateSafeVirtualFileName(file.Name, entries.Count);
-					string virtualPath = System.IO.Path.Combine(virtualRootPath, safeName);
-					entries.Add(new MountedEntry(virtualPath, chunkPath, file));
-				}
+			if (!System.IO.File.Exists(chunkPath))
+			{
+				throw new FileNotFoundException($"Endfield VFS chunk was not found: {chunk.FileName}", chunkPath);
+			}
+
+			foreach (EndfieldVfsFileInfo file in chunk.Files)
+			{
+				string safeName = CreateSafeVirtualFileName(file.Name, entries.Count);
+				string virtualPath = System.IO.Path.Combine(virtualRootPath, safeName);
+				entries.Add(new MountedEntry(virtualPath, chunkPath, file));
 			}
 		}
 	}
@@ -269,7 +292,7 @@ public sealed class EndfieldOverlayFileSystem : FileSystem
 				{
 					yield return file;
 				}
-			}
+		}
 		}
 		foreach (string file in EnumerateVirtualFiles(path, searchPattern, searchOption))
 		{
@@ -291,7 +314,7 @@ public sealed class EndfieldOverlayFileSystem : FileSystem
 				{
 					yield return directory;
 				}
-			}
+		}
 		}
 		foreach (string directory in EnumerateVirtualDirectories(path, searchPattern, searchOption))
 		{
