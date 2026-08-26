@@ -47,7 +47,7 @@ internal sealed partial record class GameInitializer
 				return false;
 			}
 
-			SmartStream smartStream = SmartStream.Create(stream);
+			using SmartStream smartStream = SmartStream.Create(stream);
 			string fileName = GetVfsFileName(dependencyName);
 			dependency = SchemeReader.ReadFile(smartStream, virtualPath, fileName);
 			return true;
