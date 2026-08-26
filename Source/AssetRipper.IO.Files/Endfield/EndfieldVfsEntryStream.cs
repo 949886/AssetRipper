@@ -1,3 +1,4 @@
+using AssetRipper.IO.Files.Streams.Smart;
 using System.Buffers.Binary;
 
 namespace AssetRipper.IO.Files.Endfield;
@@ -6,7 +7,7 @@ namespace AssetRipper.IO.Files.Endfield;
 /// Seekable, read-only view over one Endfield VFS file entry. Data is read directly from the
 /// backing chunk and decrypted only for the requested range.
 /// </summary>
-internal sealed class EndfieldVfsEntryStream : Stream
+internal sealed class EndfieldVfsEntryStream : Stream, IPartialStreamSource
 {
 	private const int VfsProtocolVersion = 3;
 	private const int ChaChaBlockSize = 64;
@@ -46,7 +47,7 @@ internal sealed class EndfieldVfsEntryStream : Stream
 		}
 	}
 
-	public EndfieldVfsEntryStream CreatePartial(long offset, long size)
+	public Stream CreatePartial(long offset, long size)
 	{
 		ArgumentOutOfRangeException.ThrowIfNegative(offset);
 		ArgumentOutOfRangeException.ThrowIfNegative(size);
