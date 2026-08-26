@@ -3,13 +3,43 @@ using System.Collections.Concurrent;
 namespace AssetRipper.IO.Files.Endfield;
 
 /// <summary>
-/// Lazily cached name index over all Endfield VFS blocks. This is used for external Unity resources
-/// such as .resS/.resource files which are requested by logical name after bundles have been loaded.
+/// Lazily cached name index over known Endfield VFS blocks. This is used for external Unity resources
+/// and standalone dependencies requested by logical name after bundles have been loaded.
 /// </summary>
 public sealed class EndfieldVfsCatalog
 {
+	private static readonly EndfieldVfsBlockType[] IndexedBlockTypes =
+	[
+		EndfieldVfsBlockType.InitialAudio,
+		EndfieldVfsBlockType.InitialBundle,
+		EndfieldVfsBlockType.InitialExtendData,
+		EndfieldVfsBlockType.BundleManifest,
+		EndfieldVfsBlockType.IFixPatch,
+		EndfieldVfsBlockType.AuditStreaming,
+		EndfieldVfsBlockType.AuditDynamicStreaming,
+		EndfieldVfsBlockType.AuditIV,
+		EndfieldVfsBlockType.AuditAudio,
+		EndfieldVfsBlockType.AuditVideo,
+		EndfieldVfsBlockType.Bundle,
+		EndfieldVfsBlockType.Audio,
+		EndfieldVfsBlockType.Video,
+		EndfieldVfsBlockType.IV,
+		EndfieldVfsBlockType.Streaming,
+		EndfieldVfsBlockType.DynamicStreaming,
+		EndfieldVfsBlockType.Lua,
+		EndfieldVfsBlockType.Table,
+		EndfieldVfsBlockType.JsonData,
+		EndfieldVfsBlockType.ExtendData,
+		EndfieldVfsBlockType.HotfixAudio,
+		EndfieldVfsBlockType.AudioChinese,
+		EndfieldVfsBlockType.AudioEnglish,
+		EndfieldVfsBlockType.AudioJapanese,
+		EndfieldVfsBlockType.AudioKorean,
+	];
+
 	private static readonly ConcurrentDictionary<string, Lazy<EndfieldVfsCatalog?>> Cache = new(StringComparer.OrdinalIgnoreCase);
-	private readonly Dictionary<string, CatalogEntry> m_entriesByName = new(StringComparer.OrdinalIgnoreCase);
+	private readonly Dictionary<string, CatalogEntry> m_entriesByExactName = new(StringComparer.OrdinalIgnoreCase);
+	private readonly Dictionary<string, CatalogEntry?> m_entriesByBasename = new(StringComparer.OrdinalIgnoreCase);
 
 	private EndfieldVfsCatalog(string gameDataPath)
 	{
@@ -22,16 +52,14 @@ public sealed class EndfieldVfsCatalog
 
 		string persistentVfsPath = Path.Combine(GameDataPath, "Persistent", "VFS");
 		string? fallbackVfsPath = Directory.Exists(persistentVfsPath) ? persistentVfsPath : null;
-		HashSet<string> visitedBlocks = new(StringComparer.OrdinalIgnoreCase);
-		IndexBlocks(streamingVfsPath, fallbackVfsPath, visitedBlocks);
-		if (!string.IsNullOrEmpty(fallbackVfsPath))
+		foreach (EndfieldVfsBlockType blockType in IndexedBlockTypes)
 		{
-			IndexBlocks(fallbackVfsPath, streamingVfsPath, visitedBlocks);
+			IndexBlock(blockType, streamingVfsPath, fallbackVfsPath);
 		}
 	}
 
 	public string GameDataPath { get; }
-	public int IndexedNameCount => m_entriesByName.Count;
+	public int IndexedNameCount => m_entriesByExactName.Count;
 
 	/// <summary>
 	/// Gets or builds the VFS catalog for an Endfield data directory.
@@ -54,7 +82,7 @@ public sealed class EndfieldVfsCatalog
 	}
 
 	/// <summary>
-	/// Opens a VFS file by logical path, normalized identifier, or basename without materializing it.
+	/// Opens a VFS file by logical path, normalized identifier, or unique basename without materializing it.
 	/// </summary>
 	public bool TryOpenFile(
 		string fileName,
@@ -82,64 +110,77 @@ public sealed class EndfieldVfsCatalog
 		}
 
 		string normalized = NormalizeLookupKey(fileName);
-		if (m_entriesByName.TryGetValue(normalized, out entry))
+		if (m_entriesByExactName.TryGetValue(normalized, out entry))
+		{
+			return true;
+		}
+
+		string fixedIdentifier = NormalizeLookupKey(SpecialFileNames.FixFileIdentifier(fileName));
+		if (m_entriesByExactName.TryGetValue(fixedIdentifier, out entry))
 		{
 			return true;
 		}
 
 		string basename = GetVfsFileName(normalized);
-		if (!string.Equals(basename, normalized, StringComparison.Ordinal) && m_entriesByName.TryGetValue(basename, out entry))
+		if (m_entriesByBasename.TryGetValue(basename, out CatalogEntry? basenameEntry) && basenameEntry is not null)
 		{
+			entry = basenameEntry;
 			return true;
 		}
 
-		string fixedIdentifier = SpecialFileNames.FixFileIdentifier(fileName);
-		return m_entriesByName.TryGetValue(NormalizeLookupKey(fixedIdentifier), out entry);
+		entry = null;
+		return false;
 	}
 
-	private void IndexBlocks(string sourceVfsPath, string? fallbackVfsPath, HashSet<string> visitedBlocks)
+	private void IndexBlock(EndfieldVfsBlockType blockType, string primaryVfsPath, string? fallbackVfsPath)
 	{
-		foreach (string blockFilePath in Directory
-			.EnumerateFiles(sourceVfsPath, "*.blc", SearchOption.AllDirectories)
-			.OrderBy(static path => path, StringComparer.OrdinalIgnoreCase))
+		string directoryName = EndfieldVfsHash.GetBlockDirectoryName(blockType);
+		string primaryBlockDirectory = Path.Combine(primaryVfsPath, directoryName);
+		string? fallbackBlockDirectory = string.IsNullOrEmpty(fallbackVfsPath)
+			? null
+			: Path.Combine(fallbackVfsPath, directoryName);
+		string blockFileName = $"{directoryName}.blc";
+
+		string? blockFilePath = ResolveExistingPath(
+			Path.Combine(primaryBlockDirectory, blockFileName),
+			string.IsNullOrEmpty(fallbackBlockDirectory) ? null : Path.Combine(fallbackBlockDirectory, blockFileName));
+		if (blockFilePath is null)
 		{
-			string relativeBlockPath = Path.GetRelativePath(sourceVfsPath, blockFilePath);
-			if (!visitedBlocks.Add(relativeBlockPath))
+			return;
+		}
+
+		EndfieldVfsBlockInfo block;
+		try
+		{
+			block = EndfieldVfsReader.ReadBlock(blockFilePath);
+		}
+		catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+		{
+			return;
+		}
+
+		if (block.BlockType != blockType)
+		{
+			return;
+		}
+
+		foreach (EndfieldVfsChunkInfo chunk in block.Chunks)
+		{
+			string? chunkPath = ResolveExistingPath(
+				Path.Combine(primaryBlockDirectory, chunk.FileName),
+				string.IsNullOrEmpty(fallbackBlockDirectory) ? null : Path.Combine(fallbackBlockDirectory, chunk.FileName));
+			if (chunkPath is null)
 			{
 				continue;
 			}
 
-			EndfieldVfsBlockInfo block;
-			try
+			foreach (EndfieldVfsFileInfo file in chunk.Files)
 			{
-				block = EndfieldVfsReader.ReadBlock(blockFilePath);
-			}
-			catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
-			{
-				continue;
-			}
-
-			string relativeBlockDirectory = Path.GetRelativePath(sourceVfsPath, block.DirectoryPath);
-			string? fallbackBlockDirectory = string.IsNullOrEmpty(fallbackVfsPath)
-				? null
-				: Path.Combine(fallbackVfsPath, relativeBlockDirectory);
-
-			foreach (EndfieldVfsChunkInfo chunk in block.Chunks)
-			{
-				string? chunkPath = ResolveChunkPath(block.DirectoryPath, fallbackBlockDirectory, chunk.FileName);
-				if (chunkPath is null)
+				if (string.IsNullOrWhiteSpace(file.Name) || file.Name.EndsWith('/') || file.Name.EndsWith('\\'))
 				{
 					continue;
 				}
-
-				foreach (EndfieldVfsFileInfo file in chunk.Files)
-				{
-					if (string.IsNullOrWhiteSpace(file.Name) || file.Name.EndsWith('/') || file.Name.EndsWith('\\'))
-					{
-						continue;
-					}
-					RegisterEntry(new CatalogEntry(chunkPath, file));
-				}
+				RegisterEntry(new CatalogEntry(chunkPath, file));
 			}
 		}
 	}
@@ -147,33 +188,38 @@ public sealed class EndfieldVfsCatalog
 	private void RegisterEntry(CatalogEntry entry)
 	{
 		string normalized = NormalizeLookupKey(entry.File.Name);
-		TryAdd(normalized, entry);
-		TryAdd(GetVfsFileName(normalized), entry);
-		TryAdd(NormalizeLookupKey(SpecialFileNames.FixFileIdentifier(entry.File.Name)), entry);
+		TryAddExact(normalized, entry);
+		TryAddExact(NormalizeLookupKey(SpecialFileNames.FixFileIdentifier(entry.File.Name)), entry);
+
+		string basename = GetVfsFileName(normalized);
+		if (!m_entriesByBasename.TryGetValue(basename, out CatalogEntry? existing))
+		{
+			m_entriesByBasename.Add(basename, entry);
+		}
+		else if (existing is not null && existing != entry)
+		{
+			// Basename-only lookup is unsafe when multiple logical files share the same name.
+			m_entriesByBasename[basename] = null;
+		}
 	}
 
-	private void TryAdd(string key, CatalogEntry entry)
+	private void TryAddExact(string key, CatalogEntry entry)
 	{
 		if (!string.IsNullOrWhiteSpace(key))
 		{
-			m_entriesByName.TryAdd(key, entry);
+			m_entriesByExactName.TryAdd(key, entry);
 		}
 	}
 
-	private static string? ResolveChunkPath(string blockDirectory, string? fallbackBlockDirectory, string chunkFileName)
+	private static string? ResolveExistingPath(string primaryPath, string? fallbackPath)
 	{
-		string primary = Path.Combine(blockDirectory, chunkFileName);
-		if (File.Exists(primary))
+		if (File.Exists(primaryPath))
 		{
-			return primary;
+			return primaryPath;
 		}
-		if (!string.IsNullOrEmpty(fallbackBlockDirectory))
+		if (!string.IsNullOrEmpty(fallbackPath) && File.Exists(fallbackPath))
 		{
-			string fallback = Path.Combine(fallbackBlockDirectory, chunkFileName);
-			if (File.Exists(fallback))
-			{
-				return fallback;
-			}
+			return fallbackPath;
 		}
 		return null;
 	}
