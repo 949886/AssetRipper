@@ -2,13 +2,20 @@
 using AssetRipper.Import.Structure.Assembly;
 using AssetRipper.Import.Structure.Platforms;
 using AssetRipper.IO.Files;
+using AssetRipper.IO.Files.Endfield;
 using System.Diagnostics;
 
 namespace AssetRipper.Import.Platforms;
 
 internal sealed class WindowsGameStructure : PlatformGameStructure
 {
-	public WindowsGameStructure(string rootPath, FileSystem fileSystem) : base(GetActualRootPath(rootPath, fileSystem), fileSystem)
+	public WindowsGameStructure(string rootPath, FileSystem fileSystem)
+		: this(rootPath, CreateEndfieldAwareFileSystem(rootPath, fileSystem), true)
+	{
+	}
+
+	private WindowsGameStructure(string rootPath, FileSystem fileSystem, bool _)
+		: base(GetActualRootPath(rootPath, fileSystem), fileSystem)
 	{
 		Debug.Assert(RootPath is not null);
 		if (rootPath != RootPath)
@@ -30,6 +37,11 @@ internal sealed class WindowsGameStructure : PlatformGameStructure
 		Version = null;
 		Il2CppGameAssemblyPath = FileSystem.Path.Join(RootPath, DefaultGameAssemblyName);
 		Il2CppMetaDataPath = FileSystem.Path.Join(GameDataPath, "il2cpp_data", MetadataName, DefaultGlobalMetadataName);
+
+		if (FileSystem is EndfieldOverlayFileSystem endfieldFileSystem)
+		{
+			Logger.Info(LogCategory.Import, $"Endfield VFS has been mounted with {endfieldFileSystem.MountedFileCount} bundle file(s).");
+		}
 
 		if (HasIl2CppFiles())
 		{
@@ -64,6 +76,25 @@ internal sealed class WindowsGameStructure : PlatformGameStructure
 		}
 
 		return fileSystem.Directory.Exists(directory) && IsRootDirectory(directory, fileSystem);
+	}
+
+	private static FileSystem CreateEndfieldAwareFileSystem(string rootPath, FileSystem fileSystem)
+	{
+		if (fileSystem is EndfieldOverlayFileSystem)
+		{
+			return fileSystem;
+		}
+
+		string actualRootPath = GetActualRootPath(rootPath, fileSystem);
+		if (!fileSystem.Directory.Exists(actualRootPath) ||
+			!GetDataDirectory(actualRootPath, fileSystem, out string? dataPath, out _))
+		{
+			return fileSystem;
+		}
+
+		return EndfieldOverlayFileSystem.TryCreate(fileSystem, dataPath, out EndfieldOverlayFileSystem? overlay)
+			? overlay
+			: fileSystem;
 	}
 
 	private static bool IsUnityDataDirectory(string folderPath, FileSystem fileSystem)
