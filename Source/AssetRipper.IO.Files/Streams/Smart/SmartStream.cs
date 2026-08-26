@@ -29,6 +29,12 @@ public sealed partial class SmartStream : Stream
 		return new SmartStream(MultiFileStream.OpenRead(path, fileSystem));
 	}
 
+	/// <summary>
+	/// Creates a <see cref="SmartStream"/> that owns <paramref name="stream"/>.
+	/// The supplied stream is disposed when the final SmartStream reference is released.
+	/// </summary>
+	public static SmartStream Create(Stream stream) => new(stream);
+
 	public static SmartStream CreateTemp()
 	{
 		string tempFile = LocalFileSystem.Instance.File.CreateTemporary();
