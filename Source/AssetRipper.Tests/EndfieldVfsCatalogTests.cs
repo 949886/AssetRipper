@@ -14,9 +14,10 @@ internal sealed class EndfieldVfsCatalogTests
 	{
 		string root = Path.Combine(Path.GetTempPath(), "AssetRipper-EndfieldCatalogTests", Guid.NewGuid().ToString("N"));
 		string gameDataPath = Path.Combine(root, "Endfield_Data");
-		string blockPath = Path.Combine(gameDataPath, "StreamingAssets", "VFS", "CAFEBABE");
+		string blockDirectoryName = EndfieldVfsHash.GetBlockDirectoryName(EndfieldVfsBlockType.Streaming);
+		string blockPath = Path.Combine(gameDataPath, "StreamingAssets", "VFS", blockDirectoryName);
 		Directory.CreateDirectory(blockPath);
-		File.WriteAllBytes(Path.Combine(blockPath, "CAFEBABE.blc"), Convert.FromBase64String(BlockFixtureBase64));
+		File.WriteAllBytes(Path.Combine(blockPath, $"{blockDirectoryName}.blc"), Convert.FromBase64String(BlockFixtureBase64));
 		File.WriteAllBytes(Path.Combine(blockPath, ChunkFileName), Convert.FromBase64String(ChunkFixtureBase64));
 
 		try
