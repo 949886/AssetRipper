@@ -22,11 +22,11 @@ public sealed class GameStructure : IDisposable
 	private GameStructure(List<string> paths, FileSystem fileSystem, CoreConfiguration configuration)
 	{
 		Logger.SendStatusChange("loading_step_detect_platform");
-		FileSystem = fileSystem;
 		PlatformChecker.CheckPlatform(paths, fileSystem, out PlatformGameStructure? platformStructure, out MixedGameStructure? mixedStructure);
 		PlatformStructure = platformStructure;
-		PlatformStructure?.CollectFiles(configuration.ImportSettings.IgnoreStreamingAssets);
 		MixedStructure = mixedStructure;
+		FileSystem = PlatformStructure?.FileSystem ?? MixedStructure?.FileSystem ?? fileSystem;
+		PlatformStructure?.CollectFiles(configuration.ImportSettings.IgnoreStreamingAssets);
 		//MixedStructure?.CollectFiles(configuration.IgnoreStreamingAssets);
 		//The PlatformGameStructure constructor adds all the paths to the Assemblies and Files dictionaries
 		//No bundles or assemblies have been loaded yet
