@@ -17,10 +17,11 @@ internal sealed class EndfieldWindowsPlatformTests
 	{
 		string root = Path.Combine(Path.GetTempPath(), "AssetRipper-EndfieldWindowsTests", Guid.NewGuid().ToString("N"));
 		string gameDataPath = Path.Combine(root, "Endfield_Data");
-		string blockPath = Path.Combine(gameDataPath, "StreamingAssets", "VFS", "DEADBEEF");
+		string blockDirectoryName = EndfieldVfsHash.GetBlockDirectoryName(EndfieldVfsBlockType.Bundle);
+		string blockPath = Path.Combine(gameDataPath, "StreamingAssets", "VFS", blockDirectoryName);
 		Directory.CreateDirectory(blockPath);
 		File.WriteAllBytes(Path.Combine(root, "Endfield.exe"), []);
-		File.WriteAllBytes(Path.Combine(blockPath, "DEADBEEF.blc"), Convert.FromBase64String(BlockFixtureBase64));
+		File.WriteAllBytes(Path.Combine(blockPath, $"{blockDirectoryName}.blc"), Convert.FromBase64String(BlockFixtureBase64));
 		File.WriteAllBytes(Path.Combine(blockPath, ChunkFileName), Convert.FromBase64String(ChunkFixtureBase64));
 
 		try
