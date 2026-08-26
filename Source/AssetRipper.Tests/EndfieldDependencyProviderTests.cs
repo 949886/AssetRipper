@@ -3,6 +3,7 @@ using AssetRipper.Import.Platforms;
 using AssetRipper.Import.Structure;
 using AssetRipper.Import.Structure.Platforms;
 using AssetRipper.IO.Files;
+using AssetRipper.IO.Files.Endfield;
 using AssetRipper.IO.Files.ResourceFiles;
 using AssetRipper.IO.Files.SerializedFiles.Parser;
 using NUnit.Framework;
@@ -20,10 +21,11 @@ internal sealed class EndfieldDependencyProviderTests
 	{
 		string root = Path.Combine(Path.GetTempPath(), "AssetRipper-EndfieldDependencyTests", Guid.NewGuid().ToString("N"));
 		string gameDataPath = Path.Combine(root, "Endfield_Data");
-		string blockPath = Path.Combine(gameDataPath, "StreamingAssets", "VFS", "CAFEBABE");
+		string blockDirectoryName = EndfieldVfsHash.GetBlockDirectoryName(EndfieldVfsBlockType.Streaming);
+		string blockPath = Path.Combine(gameDataPath, "StreamingAssets", "VFS", blockDirectoryName);
 		Directory.CreateDirectory(blockPath);
 		File.WriteAllBytes(Path.Combine(root, "Endfield.exe"), []);
-		File.WriteAllBytes(Path.Combine(blockPath, "CAFEBABE.blc"), Convert.FromBase64String(BlockFixtureBase64));
+		File.WriteAllBytes(Path.Combine(blockPath, $"{blockDirectoryName}.blc"), Convert.FromBase64String(BlockFixtureBase64));
 		File.WriteAllBytes(Path.Combine(blockPath, ChunkFileName), Convert.FromBase64String(ChunkFixtureBase64));
 
 		try
