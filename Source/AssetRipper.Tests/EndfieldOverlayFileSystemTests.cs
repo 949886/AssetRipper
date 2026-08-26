@@ -16,11 +16,12 @@ internal sealed class EndfieldOverlayFileSystemTests
 		string root = Path.Combine(Path.GetTempPath(), "AssetRipper-EndfieldOverlayTests", Guid.NewGuid().ToString("N"));
 		string gameDataPath = Path.Combine(root, "Endfield_Data");
 		string streamingAssetsPath = Path.Combine(gameDataPath, "StreamingAssets");
-		string streamingBlockPath = Path.Combine(streamingAssetsPath, "VFS", "DEADBEEF");
-		string persistentBlockPath = Path.Combine(gameDataPath, "Persistent", "VFS", "DEADBEEF");
+		string blockDirectoryName = EndfieldVfsHash.GetBlockDirectoryName(EndfieldVfsBlockType.Bundle);
+		string streamingBlockPath = Path.Combine(streamingAssetsPath, "VFS", blockDirectoryName);
+		string persistentBlockPath = Path.Combine(gameDataPath, "Persistent", "VFS", blockDirectoryName);
 		Directory.CreateDirectory(streamingBlockPath);
 		Directory.CreateDirectory(persistentBlockPath);
-		File.WriteAllBytes(Path.Combine(streamingBlockPath, "DEADBEEF.blc"), Convert.FromBase64String(BlockFixtureBase64));
+		File.WriteAllBytes(Path.Combine(streamingBlockPath, $"{blockDirectoryName}.blc"), Convert.FromBase64String(BlockFixtureBase64));
 		File.WriteAllBytes(Path.Combine(persistentBlockPath, ChunkFileName), Convert.FromBase64String(ChunkFixtureBase64));
 
 		try
@@ -38,6 +39,25 @@ internal sealed class EndfieldOverlayFileSystemTests
 			Assert.That(overlay.File.Exists(virtualFiles[1]), Is.True);
 			Assert.That(overlay.File.ReadAllBytes(virtualFiles[0]), Is.EqualTo("UnityFS-plain-fixture"u8.ToArray()));
 			Assert.That(overlay.File.ReadAllBytes(virtualFiles[1]), Is.EqualTo("UnityFS-encrypted-fixture"u8.ToArray()));
+		}
+		finally
+		{
+			Directory.Delete(root, true);
+		}
+	}
+
+	[Test]
+	public void OverlayDoesNotEnumerateUnrelatedBlockDirectories()
+	{
+		string root = Path.Combine(Path.GetTempPath(), "AssetRipper-EndfieldOverlayTests", Guid.NewGuid().ToString("N"));
+		string gameDataPath = Path.Combine(root, "Endfield_Data");
+		string unrelatedBlockPath = Path.Combine(gameDataPath, "StreamingAssets", "VFS", "DEADBEEF");
+		Directory.CreateDirectory(unrelatedBlockPath);
+		File.WriteAllBytes(Path.Combine(unrelatedBlockPath, "DEADBEEF.blc"), Convert.FromBase64String(BlockFixtureBase64));
+		File.WriteAllBytes(Path.Combine(unrelatedBlockPath, ChunkFileName), Convert.FromBase64String(ChunkFixtureBase64));
+		try
+		{
+			Assert.That(EndfieldOverlayFileSystem.TryCreate(LocalFileSystem.Instance, gameDataPath, out _), Is.False);
 		}
 		finally
 		{
