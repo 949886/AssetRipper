@@ -325,7 +325,7 @@ public sealed class EndfieldOverlayFileSystem : FileSystem
 		{
 			if (Owner.TryGetVirtualFile(path, out MountedEntry? entry))
 			{
-				return new MemoryStream(EndfieldVfsReader.ExtractFile(entry.ChunkPath, entry.File), false);
+				return new EndfieldVfsEntryStream(entry.ChunkPath, entry.File);
 			}
 			return Owner.m_inner.File.OpenRead(path);
 		}
