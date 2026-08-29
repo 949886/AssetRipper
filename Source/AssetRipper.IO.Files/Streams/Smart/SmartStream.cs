@@ -29,6 +29,12 @@ public sealed partial class SmartStream : Stream
 		return new SmartStream(MultiFileStream.OpenRead(path, fileSystem));
 	}
 
+	/// <summary>
+	/// Creates a <see cref="SmartStream"/> that owns <paramref name="stream"/>.
+	/// The supplied stream is disposed when the final SmartStream reference is released.
+	/// </summary>
+	public static SmartStream Create(Stream stream) => new(stream);
+
 	public static SmartStream CreateTemp()
 	{
 		string tempFile = LocalFileSystem.Instance.File.CreateTemporary();
@@ -99,6 +105,17 @@ public sealed partial class SmartStream : Stream
 	public SmartStream CreatePartial(long offset, long size)
 	{
 		ThrowIfNull();
+		ArgumentOutOfRangeException.ThrowIfNegative(offset);
+		ArgumentOutOfRangeException.ThrowIfNegative(size);
+		if (offset > Length || size > Length - offset)
+		{
+			throw new ArgumentOutOfRangeException(nameof(size), "The requested partial stream exceeds the source stream bounds.");
+		}
+
+		if (Stream is IPartialStreamSource partialStreamSource)
+		{
+			return new SmartStream(partialStreamSource.CreatePartial(offset, size));
+		}
 
 		// Create a partial stream if the base stream is compatible with RandomAccessStream.
 		RandomAccessStream? partialStream = Stream switch
@@ -122,6 +139,10 @@ public sealed partial class SmartStream : Stream
 		}
 
 		// Copy otherwise.
+		if (size > int.MaxValue)
+		{
+			throw new NotSupportedException("Copy-backed partial streams larger than Int32.MaxValue are not supported.");
+		}
 		byte[] buffer = new byte[(int)size];
 		long initialPosition = Stream.Position;
 		Stream.Position = offset;
@@ -228,7 +249,7 @@ public sealed partial class SmartStream : Stream
 	{
 		null => SmartStreamType.Null,
 		MemoryStream => SmartStreamType.Memory,
-		FileStream or MultiFileStream => SmartStreamType.File,
+		FileStream or MultiFileStream or IPartialStreamSource => SmartStreamType.File,
 		_ => throw new InvalidOperationException(),
 	};
 
