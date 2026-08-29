@@ -32,7 +32,7 @@ public static class EndfieldVfsHash
 		Span<byte> nameBytes = stackalloc byte[Encoding.ASCII.GetByteCount(blockName)];
 		Encoding.ASCII.GetBytes(blockName, nameBytes);
 		ulong hash64 = Hash64(nameBytes, UnityHashSecret, 0);
-		uint hash32 = (uint)hash64 ^ (uint)(hash64 >> 32);
+		uint hash32 = (uint)(hash64 & uint.MaxValue) ^ (uint)(hash64 >> 32);
 		return BinaryPrimitives.ReverseEndianness(hash32).ToString("X8");
 	}
 
@@ -161,7 +161,9 @@ public static class EndfieldVfsHash
 	private static ulong Multiply128Fold64(ulong left, ulong right)
 	{
 		UInt128 product = (UInt128)left * right;
-		return (ulong)product ^ (ulong)(product >> 64);
+		ulong low = (ulong)(product & ulong.MaxValue);
+		ulong high = (ulong)(product >> 64);
+		return low ^ high;
 	}
 
 	private static ulong Xxh3Avalanche(ulong hash)
